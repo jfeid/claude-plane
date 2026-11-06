@@ -616,8 +616,9 @@ cmd_move() {
     states=$(cmd_states "$key") || exit 1
     # First preference equal to a state name (case-insensitive), else the first state
     # starting with the first preference ("Deployed" matches "Deployed for testing").
-    IFS=$'\t' read -r sid name < <(printf '%s\n' "$states" | awk -F'\t' -v prefs="$prefs" '
-        BEGIN { n=split(prefs, p, "\n") }
+    # The list goes through the environment: BSD awk rejects newlines in -v values.
+    IFS=$'\t' read -r sid name < <(printf '%s\n' "$states" | PREFS="$prefs" awk -F'\t' '
+        BEGIN { n=split(ENVIRON["PREFS"], p, "\n") }
         { id[NR]=$1; nm[NR]=$2; rows=NR }
         END {
             for (i=1;i<=n;i++) for (r=1;r<=rows;r++) if (tolower(nm[r])==tolower(p[i])) { print id[r] "\t" nm[r]; exit }
