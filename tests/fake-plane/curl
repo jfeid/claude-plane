@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# A stand-in for curl that answers like a small Plane API, for tests/plane-cli.sh.
+# One workspace "acme", one project ABC (id p1) with work items ABC-1 (i1) and ABC-2 (i2).
+# State lives in $FAKE_PLANE_DIR: comments-<item>.json, state-<item>, requests.log.
+# FAKE_PLANE_FAIL_ONCE=<code>: the first request answers with that status.
+set -u
+dir="${FAKE_PLANE_DIR:?}"
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) jq() { command jq "$@" | tr -d '\r'; } ;;
+esac
+method=GET data="" url="" conf=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -X) method="$2"; shift 2 ;;
+        --data-binary) data="$2"; shift 2 ;;
+        -K) [ "$2" = - ] && conf=$(cat); shift 2 ;;
+        -H|-w|--max-time) shift 2 ;;
+        http://*|https://*) url="$1"; shift ;;
+        *) shift ;;
+    esac
+done
+path=$(printf '%s' "$url" | sed -E 's#^https?://[^/]+##')
+# Log the request without the token; note whether the key header came on stdin.
+auth=missing
+printf '%s' "$conf" | grep -q '^header = "X-API-Key: [^"]' && auth=ok
+printf '%s %s auth=%s %s\n' "$method" "$path" "$auth" "$data" >> "$dir/requests.log"
+
+reply() { printf '%s\n%s' "$2" "$1"; exit 0; }
+
+if [ -n "${FAKE_PLANE_FAIL_ONCE:-}" ] && [ ! -e "$dir/failed-once" ]; then
+    touch "$dir/failed-once"
+    reply "$FAKE_PLANE_FAIL_ONCE" '{"detail":"try later"}'
+fi
+[ "$auth" = ok ] || reply 401 '{"detail":"Authentication credentials were not provided."}'
+
+state_json() {
+    case "$1" in
+        s1) echo '{"id":"s1","name":"Todo","group":"unstarted"}' ;;
+        s2) echo '{"id":"s2","name":"In Progress","group":"started"}' ;;
+        s3) echo '{"id":"s3","name":"Deployed for testing","group":"started"}' ;;
+        s4) echo '{"id":"s4","name":"Done","group":"completed"}' ;;
+    esac
+}
+item_json() {
+    local iid="$1" seq="$2" st
+    st=$(cat "$dir/state-$iid" 2>/dev/null || echo s1)
+    jq -cn --arg i "$iid" --argjson seq "$seq" --argjson st "$(state_json "$st")" '{
+        id: $i, sequence_id: $seq, name: ("Export fails for item " + ($seq | tostring)),
+        state: $st, project: {id: "p1", identifier: "ABC"}, priority: "high",
+        assignees: ["u1"], created_at: "2026-09-01T08:00:00Z", updated_at: "2026-09-08T10:00:00Z",
+        description_html: "<p>The <strong>export</strong> fails.</p><ul><li><p>CSV &amp; XLSX</p></li></ul>"}'
+}
+comments() { cat "$dir/comments-$1.json" 2>/dev/null || echo '[]'; }
+
+q="${path#*\?}"; [ "$q" = "$path" ] && q=""
+p="${path%%\?*}"
+case "$method $p" in
+    "GET /api/v1/users/me/")
+        reply 200 '{"id":"u1","display_name":"Me","email":"me@example.com"}' ;;
+    "GET /api/v1/workspaces/acme/members/")
+        reply 200 '[{"id":"u1","display_name":"Me"},{"id":"u2","display_name":"Ann"}]' ;;
+    "GET /api/v1/workspaces/acme/projects/")
+        reply 200 '{"results":[{"id":"p1","identifier":"ABC","name":"Acme shop"},{"id":"p9","identifier":"OPS","name":"Ops"}],"next_page_results":false}' ;;
+    "GET /api/v1/workspaces/acme/work-items/ABC-1/") reply 200 "$(item_json i1 1)" ;;
+    "GET /api/v1/workspaces/acme/work-items/ABC-2/") reply 200 "$(item_json i2 2)" ;;
+    "GET /api/v1/workspaces/acme/work-items/"*)      reply 404 '{"error":"Issue not found"}' ;;
+    "GET /api/v1/workspaces/acme/projects/p1/states/")
+        reply 200 "$(jq -cn --argjson a "$(state_json s1)" --argjson b "$(state_json s2)" --argjson c "$(state_json s3)" --argjson d "$(state_json s4)" \
+            '{results: [$a + {sequence: 1}, $b + {sequence: 2}, $c + {sequence: 3}, $d + {sequence: 4}], next_page_results: false}')" ;;
+    "GET /api/v1/workspaces/acme/projects/p1/work-items/")
+        reply 200 "$(jq -cn --argjson a "$(item_json i1 1)" --argjson b "$(item_json i2 2)" '{results: [$a, $b], next_page_results: false}')" ;;
+    "POST /api/v1/workspaces/acme/projects/p1/work-items/")
+        reply 201 '{"id":"i3","sequence_id":3}' ;;
+    "PATCH /api/v1/workspaces/acme/projects/p1/work-items/"*)
+        iid=$(printf '%s' "$p" | sed -E 's#.*/work-items/([^/]+)/$#\1#')
+        st=$(printf '%s' "$data" | jq -r '.state // empty')
+        [ -n "$st" ] && printf '%s' "$st" > "$dir/state-$iid"
+        reply 200 "$(item_json "$iid" 1)" ;;
+    "GET /api/v1/workspaces/acme/projects/p1/work-items/"*/comments/)
+        iid=$(printf '%s' "$p" | sed -E 's#.*/work-items/([^/]+)/comments/$#\1#')
+        reply 200 "$(jq -c '{results: ., next_page_results: false}' <<< "$(comments "$iid")")" ;;
+    "POST /api/v1/workspaces/acme/projects/p1/work-items/"*/comments/)
+        iid=$(printf '%s' "$p" | sed -E 's#.*/work-items/([^/]+)/comments/$#\1#')
+        ext=$(printf '%s' "$data" | jq -r '.external_id // empty')
+        all=$(comments "$iid")
+        if [ -n "$ext" ]; then
+            old=$(jq -r --arg e "$ext" '[.[] | select(.external_id == $e)][0].id // empty' <<< "$all")
+            [ -n "$old" ] && reply 409 "$(jq -cn --arg id "$old" '{error: "Comment with the same external id and external source already exists", id: $id}')"
+        fi
+        n=$(( $(jq length <<< "$all") + 1 ))
+        new=$(jq -c --arg id "c$iid-$n" --argjson n "$n" '. + {id: $id, created_by: "u1", deleted_at: null,
+            created_at: ("2026-09-08T1" + ($n | tostring) + ":00:00Z")}' <<< "$data")
+        jq -c --argjson c "$new" '. + [$c]' <<< "$all" > "$dir/comments-$iid.json"
+        reply 201 "$new" ;;
+esac
+reply 404 "{\"detail\":\"fake plane: no route for $method $p\"}"

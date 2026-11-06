@@ -1,0 +1,75 @@
+name: test
+
+# Changes to docs and images alone do not run the tests. The skill's
+# SKILL.md is code for Claude, so it is not in this list.
+on:
+  push:
+    paths-ignore:
+      - 'README.md'
+      - 'PRIVACY.md'
+      - 'SECURITY.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.claude-plugin/icon.png'
+  pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'PRIVACY.md'
+      - 'SECURITY.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.claude-plugin/icon.png'
+  workflow_dispatch:
+
+jobs:
+  plane-sh:
+    name: plane.sh on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15-intel while GitHub lacks capacity for Apple Silicon
+        # (macos-latest); both have bash 3.2 and BSD date.
+        os: [ubuntu-latest, macos-15-intel, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      # plane.sh reads the timer through the worklog-timer plugin's timer.sh.
+      - uses: actions/checkout@v5
+        with:
+          repository: jfeid/claude-timer
+          path: claude-timer
+      - name: Tool versions
+        shell: bash
+        run: |
+          bash --version | head -1
+          date --version 2>/dev/null | head -1 || echo "date: not GNU (BSD)"
+          jq --version || echo "jq: missing"
+          curl --version | head -1
+      # plane.sh needs jq; the runners ship it, this is a fallback.
+      - name: jq
+        shell: bash
+        run: |
+          command -v jq >/dev/null && exit 0
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get install -y jq ;;
+            macOS) brew install jq ;;
+            Windows) choco install jq -y ;;
+          esac
+      - name: Test plane.sh
+        shell: bash
+        run: TIMER_BIN="$PWD/claude-timer/bin/timer.sh" bash tests/plane-cli.sh
+
+  validate:
+    name: plugin validation and mod tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code && claude --version
+      - name: Validate
+        run: claude plugin validate --strict .
+      - name: Mod tests
+        run: claude plugin test .

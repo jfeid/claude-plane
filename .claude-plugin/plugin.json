@@ -1,0 +1,27 @@
+{
+  "name": "plane-worklog",
+  "displayName": "Plane Worklog",
+  "version": "0.1.0",
+  "description": "Plane work item workflow for Claude Code: start and close work items, log timer time as quarter-rounded worklog comments, and check day and month reports against Plane. Works with Plane Cloud and self-hosted Plane; uses the worklog-timer plugin.",
+  "author": {
+    "name": "Giannis Feidaros",
+    "email": "info@maxweb.gr",
+    "url": "https://github.com/jfeid"
+  },
+  "homepage": "https://github.com/jfeid/claude-plane",
+  "repository": "https://github.com/jfeid/claude-plane",
+  "documentationUrl": "https://github.com/jfeid/claude-plane#readme",
+  "supportUrl": "https://github.com/jfeid/claude-plane/issues",
+  "privacyPolicyUrl": "https://github.com/jfeid/claude-plane/blob/main/PRIVACY.md",
+  "license": "MIT",
+  "keywords": [
+    "plane",
+    "worklog",
+    "time-tracking",
+    "project-management",
+    "billing"
+  ],
+  "dependencies": [
+    "worklog-timer@claude-timer"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "claude-plane",
+  "description": "Plane work item workflow and worklogs for Claude Code",
+  "owner": {
+    "name": "jfeid",
+    "url": "https://github.com/jfeid"
+  },
+  "allowCrossMarketplaceDependenciesOn": ["claude-timer"],
+  "plugins": [
+    {
+      "name": "plane-worklog",
+      "source": "./",
+      "description": "Start and close Plane work items, log timer time as worklog comments, and day and month reports against Plane"
+    }
+  ]
+}
