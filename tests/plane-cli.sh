@@ -25,7 +25,7 @@ export CLAUDE_CONFIG_DIR="$TMP/claude"
 export PATH="$HERE/tests/fake-plane:$PATH"
 chmod +x "$HERE/tests/fake-plane/curl" 2>/dev/null
 unset CLAUDE_CODE_SESSION_ID CLAUDE_PID TIMER_SESSION_NAME KEY_PREFIX_INCLUDE KEY_PREFIX_EXCLUDE \
-    JIRA_SESSION_TASK PLANE_API_KEY FAKE_PLANE_FAIL_ONCE
+    JIRA_SESSION_TASK PLANE_API_KEY FAKE_PLANE_FAIL
 mkdir -p "$FAKE_PLANE_DIR"
 TOKEN="plane_api_ci0123456789"
 
@@ -116,7 +116,12 @@ echo "== work items"
 run "issue" 0 issue ABC-1
 has "title=Export fails for item 1"; has "state=Todo"; has "assignees=Me"; has "The export fails."; has "- CSV & XLSX"
 run "issue not found" 1 issue ABC-404;             has "not found"
-FAKE_PLANE_FAIL_ONCE=429 run "retry after 429" 0 issue ABC-2; has "title=Export fails for item 2"
+FAKE_PLANE_FAIL=429 run "retry after 429" 0 issue ABC-2; has "title=Export fails for item 2"
+rm -f "$FAKE_PLANE_DIR/failed"
+FAKE_PLANE_FAIL=429:3 run "retry after 429 three times" 0 issue ABC-2; has "title=Export fails for item 2"
+rm -f "$FAKE_PLANE_DIR/failed"
+FAKE_PLANE_FAIL=500:2 run "500 twice" 1 issue ABC-2; has "HTTP 500"
+rm -f "$FAKE_PLANE_DIR/failed"
 PLANE_API_KEY=" " run "empty token" 1 issue ABC-1; has "HTTP 401"
 requests;                                          hasnt "$TOKEN"
 : > "$FAKE_PLANE_DIR/requests.log"
@@ -145,6 +150,9 @@ run_in "⏱ 30m · started 2026-09-08 14:00 · typed by hand" "hand worklog" 0 c
 run "worklogs, hand" 0 worklogs ABC-1;             has "$(printf '1800\t1\thand\ttyped by hand')"
 run "worklog-days" 0 worklog-days 2026-09-07 2026-09-08
 has "$(printf '2026-09-07\tABC-1\t4500\t1')"; has "$(printf '2026-09-08\tABC-1\t1800\t1')"
+rm -f "$FAKE_PLANE_DIR/failed"
+FAKE_PLANE_FAIL=429:8 run "worklog-days, rate limit" 1 worklog-days 2026-09-07 2026-09-08; has "RATE_LIMIT_EXCEEDED"
+rm -f "$FAKE_PLANE_DIR/failed"
 run "ledger-check" 0 ledger-check ABC-1;           has "$(printf 'ABC-1\tci1-1\t4500\t4500\tok')"
 run "day" 0 day 2026-09-07;                        has "ABC-1"; hasnt "XYZ-9"
 run "month" 0 month 09-2026;                       has "billable_seconds=6300"; hasnt "XYZ-9"

@@ -2,7 +2,6 @@
 # A stand-in for curl that answers like a small Plane API, for tests/plane-cli.sh.
 # One workspace "acme", one project ABC (id p1) with work items ABC-1 (i1) and ABC-2 (i2).
 # State lives in $FAKE_PLANE_DIR: comments-<item>.json, state-<item>, requests.log.
-# FAKE_PLANE_FAIL_ONCE=<code>: the first request answers with that status.
 set -u
 dir="${FAKE_PLANE_DIR:?}"
 case "$(uname -s 2>/dev/null)" in
@@ -27,9 +26,14 @@ printf '%s %s auth=%s %s\n' "$method" "$path" "$auth" "$data" >> "$dir/requests.
 
 reply() { printf '%s\n%s' "$2" "$1"; exit 0; }
 
-if [ -n "${FAKE_PLANE_FAIL_ONCE:-}" ] && [ ! -e "$dir/failed-once" ]; then
-    touch "$dir/failed-once"
-    reply "$FAKE_PLANE_FAIL_ONCE" '{"detail":"try later"}'
+# FAKE_PLANE_FAIL=<code>[:<times>]: the next <times> requests (default 1) answer with that status.
+if [ -n "${FAKE_PLANE_FAIL:-}" ]; then
+    n=$(cat "$dir/failed" 2>/dev/null || echo 0)
+    case "$FAKE_PLANE_FAIL" in *:*) times="${FAKE_PLANE_FAIL#*:}" ;; *) times=1 ;; esac
+    if [ "$n" -lt "$times" ]; then
+        echo $((n + 1)) > "$dir/failed"
+        reply "${FAKE_PLANE_FAIL%%:*}" '{"error_code":5900,"error_message":"RATE_LIMIT_EXCEEDED"}'
+    fi
 fi
 [ "$auth" = ok ] || reply 401 '{"detail":"Authentication credentials were not provided."}'
 

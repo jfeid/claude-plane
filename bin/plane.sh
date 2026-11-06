@@ -244,15 +244,19 @@ api() {
     local method="$1" path="$2" data="${3:-}" out try url tok
     tok=$(token) || exit 1
     case "$path" in /api/*) url="$API_ROOT$path" ;; *) url="$API$path" ;; esac
-    for try in 1 2; do
+    # Plane allows about 60 requests a minute: on 429 wait up to a minute in
+    # all (3 more tries); on 5xx or no answer, one more try.
+    for try in 1 2 3 4; do
         out=$(printf 'header = "X-API-Key: %s"\n' "$tok" |
             curl -sS --max-time 30 -K - -X "$method" -w '\n%{http_code}' \
                 -H 'Content-Type: application/json' ${data:+--data-binary "$data"} "$url") || out=$'\n000'
         HTTP="${out##*$'\n'}"
         BODY="${out%$'\n'*}"
         case "$HTTP" in
-            429|5??|000) [ "$try" = 1 ] || break
-                         sleep "${PLANE_RETRY_WAIT:-$([ "$HTTP" = 429 ] && echo 20 || echo 3)}" ;;
+            429) [ "$try" -lt 4 ] || break
+                 sleep "${PLANE_RETRY_WAIT:-$((try * 10 + 10))}" ;;
+            5??|000) [ "$try" = 1 ] || break
+                 sleep "${PLANE_RETRY_WAIT:-3}" ;;
             *) break ;;
         esac
     done
@@ -506,9 +510,14 @@ cmd_worklog_days() {
     else
         keys=$(period_keys "$A" "$Z")
     fi
+    [ -n "$keys" ] || return 0
+    # Read my id once here, not once per key in the subshells below.
+    use_ws "$(printf '%s\n' $keys | head -1)"
+    ME_ID=$(me_id) || exit 1
     for k in $keys; do
         use_ws "$k"
-        worklog_rows "$k" | awk -F'\t' -v a="$A" -v z="$Z" '$5==1 && $3>=a && $3<z'
+        # A key that cannot be read stops the report: a partial total would look complete.
+        worklog_rows "$k" | awk -F'\t' -v a="$A" -v z="$Z" '$5==1 && $3>=a && $3<z' || exit 1
     done | while IFS=$'\t' read -r k id e s mine src note; do
         printf '%s\t%s\t%s\n' "$(fmt_epoch "$e" %Y-%m-%d)" "$k" "$s"
     done | awk -F'\t' -v OFS='\t' '{ s[$1 OFS $2]+=$3; n[$1 OFS $2]++ } END { for (x in s) print x, s[x], n[x] }' | sort

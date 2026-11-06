@@ -1,7 +1,7 @@
 {
   "name": "plane-worklog",
   "displayName": "Plane Worklog",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Plane work item workflow for Claude Code: start and close work items, log timer time as quarter-rounded worklog comments, and check day and month reports against Plane. Works with Plane Cloud and self-hosted Plane; uses the worklog-timer plugin.",
   "author": {
     "name": "Giannis Feidaros",
