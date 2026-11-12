@@ -29,7 +29,7 @@ export const register: Register = on => {
       await $.command.register({
         name: 'plane',
         description: 'Plane work item workflow: start, close, status, log, day and month reports',
-        argumentHint: `[${ACTIONS}] [KEY|URL|DATE|MM-YYYY]`,
+        argumentHint: `[${ACTIONS}] [KEY|URL|DATE|MM-YYYY] [--done]`,
       })
     } catch (err) {
       // Another command already owns /plane; the skill still answers plain requests.

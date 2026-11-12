@@ -1,7 +1,7 @@
 ---
 name: plane-workflow
 description: Plane work item workflow with time tracking. Start or close a work item (read it, move its state, run the worklog timer, log the rounded time as a worklog comment, draft the closing comment), plus show, status, log, comment, move, done, mine, a full-day worklog report (day), a monthly billable-hours report (month) and editing work items after a preview. Use for /plane, or when the user asks to start or close a Plane work item, log time to Plane, or compare timer time with Plane worklogs.
-argument-hint: "<start|close|show|status|log|day|month|comment|move|done|pause|resume|mine|setup|help> [KEY|URL|DATE|MM-YYYY] [...]"
+argument-hint: "<start|close|show|status|log|day|month|comment|move|done|pause|resume|mine|setup|help> [KEY|URL|DATE|MM-YYYY] [--done] [...]"
 user-invocable: false
 allowed-tools: Bash(plane.sh key:*) Bash(plane.sh figures:*) Bash(plane.sh parse-time:*) Bash(plane.sh logged:*) Bash(plane.sh context:*) Bash(plane.sh day:*) Bash(plane.sh month:*) Bash(plane.sh base-branch:*) Bash(plane.sh config:*) Bash(plane.sh check:*) Bash(plane.sh issue:*) Bash(plane.sh comments:*) Bash(plane.sh worklogs:*) Bash(plane.sh worklog-days:*) Bash(plane.sh states:*) Bash(plane.sh ledger-check:*) Bash(plane.sh mine:*) Bash(plane.sh url:*) Bash(plane.sh modules:*) Bash(plane.sh relations:*) Bash(plane.sh links:*) Bash(plane.sh help:*) Bash(timer.sh:*)
 ---
@@ -45,7 +45,7 @@ parents stay within one workspace. Time is tracked per repository (timer log
 and ledger), whichever workspace the key is in.
 
 - `/plane start [KEY] [--branch|--base]` - read the work item and its comments, ask whether to work on a `KEY` branch or on the base branch and switch to it, move to In Progress, start the timer, brief the user
-- `/plane close [KEY]` - stop the timer, log the rounded time, move to the "deployed" state, preview the closing comment
+- `/plane close [KEY] [--done]` - stop the timer, log the rounded time, move to the "deployed" state (Done with `--done`), preview the closing comment
 - `/plane show [KEY]` - re-read the work item without changing anything
 - `/plane status [KEY]` - one-screen state: Plane state, timer, logged vs unlogged time
 - `/plane log [KEY] [1h 30m]` - log work now without closing (timer figure, or the given duration)
@@ -133,7 +133,7 @@ in `workspaces.<slug>.transitions`): first exact name match
 `Deployed`, `Ready for testing`, `In Review`; `Done`. `move` exits 3 with the
 list when nothing matches: show it and ask which state to use. When the item
 is already in the target state the script says so and nothing changes. Never
-move to Done except through `done` or an explicit `move`.
+move to Done except through `done`, `close --done` or an explicit `move`.
 
 ## setup
 
@@ -228,7 +228,8 @@ not change them unless asked.
    <rounded_seconds> "<started>" "<note>"` with a one-line note in
    `worklog_language` naming only the phases that happened, e.g.
    `Investigation, fix (IBAN matching), tests, production deploy.`
-5. `plane.sh move KEY close`.
+5. `plane.sh move KEY close`; with `--done` in the extra input,
+   `plane.sh move KEY done` instead.
 6. Draft the closing comment (style below) from this session's work; in a
    fresh session first run `plane.sh context KEY` (branch, commits
    mentioning the key, files touched, task docs under `docs/` and `notes/`)

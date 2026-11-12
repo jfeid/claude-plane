@@ -50,7 +50,7 @@ environment variable. Do not paste it into the conversation.
 
 ```
 /plane start ABC-12            read the work item, pick a branch, In Progress, start the timer, brief me
-/plane close                   stop the timer, log the rounded time, move on, preview the closing comment
+/plane close [--done]          stop the timer, log the rounded time, move on (to Done with --done), preview the closing comment
 /plane show | status           re-read the item / Plane state, timer, logged and unlogged time
 /plane log [1h 30m]            log work now without closing (timer remainder, or the given time)
 /plane day [DATE] [--here] [--scan]
@@ -90,7 +90,7 @@ the workspace.
 | Action | Writes |
 |---|---|
 | `start` | state → In Progress |
-| `close` | worklog comment, state → the "deployed" state; the closing comment only after you say yes to the preview |
+| `close` | worklog comment, state → the "deployed" state (Done with `--done`); the closing comment only after you say yes to the preview |
 | `log` | worklog comment |
 | `day` | worklog comments for the items you pick from the preview |
 | `move`, `done` | state |
