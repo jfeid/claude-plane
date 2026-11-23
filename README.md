@@ -101,8 +101,10 @@ the workspace.
 people's comments are never edited, and assignees, priority, labels, cycles
 and modules are left as they are unless you ask.
 
-**Rounding.** Each worklog is the timer's unlogged time rounded up to the
-quarter hour. A ledger (below) remembers what was logged, so the next `log`
+**Rounding.** Unlogged time is logged as one worklog per day it was
+tracked, each rounded up to the quarter hour, since a worklog carries a
+single start and is filed under that day: work spread over Friday and Monday
+becomes two worklogs, not one dated Friday. A ledger (below) remembers what was logged, so the next `log`
 or `close` takes only the remainder. The comments in Plane are the truth:
 `day` and `month` compare the ledger with them and point out worklogs deleted
 or typed by hand.
@@ -159,7 +161,7 @@ and works out the figures:
 
 ```
 plane.sh issue ABC-12            fields and description
-plane.sh figures ABC-12          tracked, logged, unlogged, rounded time and start
+plane.sh figures ABC-12          tracked, logged, unlogged, and the worklogs to write (one per day)
 plane.sh log-work ABC-12 4500 "2026-10-05 09:36" "Fix and tests."
 plane.sh day yesterday           one day across projects, with ready-made worklog values
 plane.sh worklog-days 2026-10-01 2026-10-31

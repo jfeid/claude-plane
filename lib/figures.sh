@@ -6,7 +6,8 @@
 #
 #   jira.sh key [KEY|URL]           resolve a ticket key: the argument, else the session's task
 #   jira.sh session-name            the session's name, when it can be a task (from timer.sh)
-#   jira.sh figures [KEY]           worklog figures from the timer log, minus time already logged
+#   jira.sh figures [KEY]           worklog figures from the timer log, minus time already logged:
+#                                   one worklog per day with unlogged time (worklog_<i>_*)
 #   jira.sh parse-time "1h 30m"     convert a Jira duration to seconds
 #   jira.sh mark-logged KEY SECONDS [WORKLOG_ID] [NOTE] [STARTED]
 #                                   record a worklog in the ledger so it is not logged twice
@@ -245,32 +246,104 @@ ledger_seconds() {
     [ -s "$l" ] || { echo 0; return; }
     awk -F'\t' -v k="$1" '$1==k{s+=$2} END{printf "%d", s+0}' "$l"
 }
-ledger_last_epoch() {
-    [ -s "$LEDGER" ] || { echo 0; return; }
-    awk -F'\t' -v k="$1" '$1==k{e=$4} END{printf "%d", e+0}' "$LEDGER"
-}
-
-# Epoch of the first START/RESUME of KEY at or after EPOCH (empty when none).
-first_start_after() {
-    [ -s "$TIMER_LOG" ] || return 0
-    awk -F'\t' -v k="$1" -v after="$2" '$1==k && ($2=="START"||$2=="RESUME") && $3>=after { print $3; exit }' "$TIMER_LOG"
-}
-
 last_event_stamp() {
     [ -s "$TIMER_LOG" ] || return 0
     awk -F'\t' -v k="$1" '$1==k{e=$3} END{print e}' "$TIMER_LOG"
 }
 
+# A worklog has one start and one duration, so Jira files all of it under the
+# day it started: unlogged time is logged as one worklog per day it was tracked.
+#
+# Per day KEY was tracked, oldest first:
+#   day <TAB> tracked <TAB> billable <TAB> covered <TAB> to_log <TAB> started_epoch
+# billable is the day's tracked time rounded up to the quarter (as in `month`).
+# Ledger worklogs cover the day they started on (the first tracked day when no
+# start was recorded); what a worklog holds beyond its day's billable time
+# covers the following days, and what is still left the latest days. started
+# is the day's first timer start, or for a day already partly logged its first
+# start after the last worklog was written.
+unlogged_days() {
+    local key="$1" log="${2:-$TIMER_LOG}" ledger="${3:-$LEDGER}" a z d="" d_from=0 d_to=0 s e st
+    [ -s "$log" ] || return 0
+    {
+        # Timer intervals split at local midnight: T <TAB> day <TAB> from <TAB> to
+        while IFS=$'\t' read -r a z; do
+            while [ "$a" -lt "$z" ]; do
+                if [ "$a" -lt "$d_from" ] || [ "$a" -ge "$d_to" ]; then
+                    d=$(fmt_epoch "$a" %Y-%m-%d)
+                    d_from=$(midnight "$d")
+                    d_to=$(midnight "$(add_days "$d" 1)")
+                fi
+                e=$z; [ "$e" -gt "$d_to" ] && e=$d_to
+                printf 'T\t%s\t%s\t%s\n' "$d" "$a" "$e"
+                a=$e
+            done
+        done < <(awk -F'\t' -v k="$key" -v now="$(date +%s)" '
+            $1==k { if ($2=="START" || $2=="RESUME") { if (!o) o=$3 }
+                    else if ($2=="PAUSE" || $2=="STOP") { if (o) { print o "\t" $3; o=0 } } }
+            END { if (o) print o "\t" now }' "$log")
+        # Ledger worklogs: L <TAB> day started (empty when not recorded) <TAB> seconds <TAB> logged epoch
+        if [ -s "$ledger" ]; then
+            while IFS=$'\t' read -r s e st; do
+                printf 'L\t%s\t%s\t%s\n' "${st:+$(fmt_epoch "$st" %Y-%m-%d)}" "$s" "$e"
+            done < <(awk -F'\t' -v k="$key" -v OFS='\t' '$1==k { print $2, $4, $7 }' "$ledger")
+        fi
+    } | awk -F'\t' -v q="$QUARTER" '
+        function ru(s) { return s<=0 ? 0 : int((s + q - 1) / q) * q }
+        $1=="T" { d=$2; if (!(d in tr)) { day[++n]=d; tr[d]=0 } tr[d]+=$4-$3; ts[d, ++ns[d]]=$3+0 }
+        $1=="L" { m++; ld[m]=$2; ls[m]=$3+0; if ($4+0 > last) last=$4+0 }
+        END {
+            if (!n) exit
+            for (i=2; i<=n; i++) for (j=i; j>1 && day[j] < day[j-1]; j--) { t=day[j]; day[j]=day[j-1]; day[j-1]=t }
+            for (j=1; j<=n; j++) bill[j]=ru(tr[day[j]])
+            for (i=1; i<=m; i++) {
+                for (j=1; j<=n && ld[i]!="" && day[j] < ld[i]; j++) ;
+                if (j>n) late+=ls[i]; else cr[j]+=ls[i]
+            }
+            for (j=1; j<=n; j++) { a=cr[j]+carry; cov[j]=(a < bill[j] ? a : bill[j]); carry=a-cov[j] }
+            pool=carry+late
+            for (j=n; j>=1 && pool>0; j--) { r=bill[j]-cov[j]; t=(r < pool ? r : pool); cov[j]+=t; pool-=t }
+            for (j=1; j<=n; j++) {
+                d=day[j]; s=ts[d, 1]
+                if (cov[j]>0) for (c=1; c<=ns[d]; c++) if (ts[d, c] >= last) { s=ts[d, c]; break }
+                printf "%s\t%d\t%d\t%d\t%d\t%d\n", d, tr[d], bill[j], cov[j], bill[j]-cov[j], s
+            }
+        }'
+}
+
+# Sum of to_log over unlogged_days.
+unlogged_rounded() { unlogged_days "$@" | awk -F'\t' '{ s+=$5 } END { printf "%d", s+0 }'; }
+
+# The worklogs to write for KEY, one per day with time to log, as key=value lines:
+# rounded_seconds, time_spent and started (the first worklog's; with nothing to
+# log, the last tracked day's first start), worklogs=N and per worklog
+# worklog_<i>_{day,tracked,seconds,time_spent,started}.
+worklog_plan() {
+    local d t b c r s n=0 sum=0 first="" latest="" lines=""
+    while IFS=$'\t' read -r d t b c r s; do
+        [ -z "$d" ] && continue
+        latest=$s
+        [ "$r" -gt 0 ] || continue
+        n=$((n+1)); sum=$((sum+r)); [ -z "$first" ] && first=$s
+        lines+="worklog_${n}_day=$d"$'\n'
+        lines+="worklog_${n}_tracked=$(fmt "$t")"$'\n'
+        lines+="worklog_${n}_seconds=$r"$'\n'
+        lines+="worklog_${n}_time_spent=$(jira_time "$r")"$'\n'
+        lines+="worklog_${n}_started=$(iso "$s")"$'\n'
+    done < <(unlogged_days "$@")
+    [ -z "$first" ] && first=${latest:-$(date +%s)}
+    echo "rounded_seconds=$sum"
+    echo "time_spent=$(jira_time "$sum")"
+    echo "started=$(iso "$first")"
+    echo "worklogs=$n"
+    printf '%s' "$lines"
+}
+
 cmd_figures() {
-    local key="$1" tot st logged unlogged rounded after start_epoch last
+    local key="$1" tot st logged unlogged last
     IFS=$'\t' read -r tot st <<< "$(timer_totals "$key")"
     logged=$(ledger_seconds "$key")
     unlogged=$((tot - logged)); [ "$unlogged" -lt 0 ] && unlogged=0
-    rounded=$(roundup "$unlogged")
-    after=$(ledger_last_epoch "$key")
-    start_epoch=$(first_start_after "$key" "$after")
-    [ -z "$start_epoch" ] && start_epoch=$(first_start_after "$key" 0)
-    [ -z "$start_epoch" ] && start_epoch=$(date +%s)
     last=$(last_event_stamp "$key")
     echo "key=$key"
     echo "project=$PROJECT"
@@ -280,9 +353,7 @@ cmd_figures() {
     echo "logged_seconds=$logged"
     echo "logged=$(fmt "$logged")"
     echo "unlogged_seconds=$unlogged"
-    echo "rounded_seconds=$rounded"
-    echo "time_spent=$(jira_time "$rounded")"
-    echo "started=$(iso "$start_epoch")"
+    worklog_plan "$key"
     echo "last_event=${last:+$(fmt_epoch "$last" '%Y-%m-%d %H:%M:%S')}"
     echo "timer_log=$TIMER_LOG"
     echo "ledger=$LEDGER"
@@ -391,7 +462,7 @@ cmd_day() {
         echo "tickets=0"
         echo "No time tracked on $day."
     else
-        local p k s r f l st logged_day tot_all logged_all unlogged unl_r
+        local p k s r f l st logged_day tot_all logged_all unlogged unl_r plan
         local g_s=0 g_r=0 g_ld=0 g_unl=0 n=0
         local table="" blocks=""
         while IFS=$'\t' read -r p k s r f l st; do
@@ -401,7 +472,8 @@ cmd_day() {
             IFS=$'\t' read -r tot_all _ <<< "$(timer_totals "$k" "$TIMER_ROOT/logs/$p.tsv")"
             logged_all=$(ledger_seconds "$k" "$ROOT/logs/$p.tsv")
             unlogged=$((tot_all - logged_all)); [ "$unlogged" -lt 0 ] && unlogged=0
-            unl_r=$(roundup "$unlogged")
+            plan=$(worklog_plan "$k" "$TIMER_ROOT/logs/$p.tsv" "$ROOT/logs/$p.tsv" | sed 's/^rounded_seconds=/unlogged_rounded_seconds=/')
+            unl_r=$(printf '%s\n' "$plan" | sed -n 's/^unlogged_rounded_seconds=//p')
             g_s=$((g_s+s)); g_r=$((g_r+r)); g_ld=$((g_ld+logged_day)); g_unl=$((g_unl+unl_r))
             table+=$(printf '%-15s %-12s %-8s %-8s %-8s %-8s %-6s %-6s %s' "$p" "$k" "$(fmt "$s")" "$(fmt "$r")" \
                 "$(fmt "$logged_day")" "$(fmt "$unl_r")" "$(fmt_epoch "$f" %H:%M)" "$(fmt_epoch "$l" %H:%M)" "$st")$'\n'
@@ -417,9 +489,7 @@ cmd_day() {
             blocks+="tracked_total_seconds=$tot_all"$'\n'
             blocks+="logged_total_seconds=$logged_all"$'\n'
             blocks+="unlogged_seconds=$unlogged"$'\n'
-            blocks+="unlogged_rounded_seconds=$unl_r"$'\n'
-            blocks+="time_spent=$(jira_time "$unl_r")"$'\n'
-            blocks+="started=$(iso "$f")"$'\n'
+            blocks+="$plan"$'\n'
             blocks+=$'\n'
         done <<< "$rows"
 
@@ -432,7 +502,7 @@ cmd_day() {
         printf '%-15s %-12s %-8s %-8s %-8s %-8s\n' "" TOTAL "$(fmt "$g_s")" "$(fmt "$g_r")" "$(fmt "$g_ld")" "$(fmt "$g_unl")"
         echo
         echo "TRACKED/ROUNDED: time on $day. LOGGED: ledger worklogs for $day."
-        echo "UNLOGGED: whole remainder for the ticket (all days), rounded up; this is what a worklog would take."
+        echo "UNLOGGED: whole remainder for the ticket (all days), each day rounded up; one worklog per day (worklog_<i>_*)."
         echo
         printf '%s' "$blocks"
         echo "--- timeline"
@@ -565,13 +635,11 @@ cmd_month() {
     echo "--- tickets"
     printf '%-15s %-12s %-5s %-8s %-9s %-8s %-9s %-11s %-11s %s\n' PROJECT KEY DAYS TRACKED BILLABLE LOGGED UNLOGGED FIRST LAST STATE
     printf '%s\n' "------------------------------------------------------------------------------------------------"
-    local f z st tot_all logged_all unlogged unl_r g_unl=0
+    local f z st tot_all unl_r g_unl=0
     while IFS=$'\t' read -r p k n s r l f z st; do
         [ -z "$k" ] && continue
         IFS=$'\t' read -r tot_all a <<< "$(timer_totals "$k" "$TIMER_ROOT/logs/$p.tsv")"
-        logged_all=$(ledger_seconds "$k" "$ROOT/logs/$p.tsv")
-        unlogged=$((tot_all - logged_all)); [ "$unlogged" -lt 0 ] && unlogged=0
-        unl_r=$(roundup "$unlogged"); g_unl=$((g_unl + unl_r))
+        unl_r=$(unlogged_rounded "$k" "$TIMER_ROOT/logs/$p.tsv" "$ROOT/logs/$p.tsv"); g_unl=$((g_unl + unl_r))
         [ -z "$st" ] && st="$a"
         printf '%-15s %-12s %-5s %-8s %-9s %-8s %-9s %-11s %-11s %s\n' "$p" "$k" "$n" "$(fmt "$s")" "$(fmt "$r")" \
             "$(fmt "$l")" "$(fmt "$unl_r")" "${f:--}" "${z:--}" "$st"
@@ -588,7 +656,7 @@ cmd_month() {
     printf '%-15s %-12s %-5s %-8s %-9s %-8s %s\n' "" TOTAL "$n_days" "$(fmt "$t_s")" "$(fmt "$t_r")" "$(fmt "$t_l")" "$(fmt "$g_unl")"
     echo
     echo "BILLABLE: per ticket per day rounded up to the quarter, summed ($(hours "$t_r") h). LOGGED: ledger"
-    echo "worklogs filed under $MONTH. UNLOGGED: whole remainder per ticket (all days), rounded up."
+    echo "worklogs filed under $MONTH. UNLOGGED: whole remainder per ticket (all days), each day rounded up."
 }
 
 # ---- git, config --------------------------------------------------------------
@@ -690,6 +758,6 @@ case "$CMD" in
     staging-keys) cmd_staging_keys "$@" ;;
     init)         cmd_init "$@" ;;
     config)       cmd_config ;;
-    help|-h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//' ;;
+    help|-h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//' ;;
     *)            die "Unknown command: $CMD (try: jira.sh help)" ;;
 esac

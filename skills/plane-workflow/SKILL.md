@@ -90,7 +90,7 @@ token; only `plane.sh` reads it.
 | Comments (worklogs folded) | `plane.sh comments KEY` |
 | Worklogs of one item | `plane.sh worklogs KEY [FROM [TO]]` → TSV key, comment_id, started_epoch, seconds, mine, source, note |
 | My worklogs per day | `plane.sh worklog-days FROM TO [--scan]` → TSV date, key, seconds, count |
-| Timer figures | `plane.sh figures KEY` → `rounded_seconds`, `time_spent`, `started` |
+| Timer figures | `plane.sh figures KEY` → `rounded_seconds`, `time_spent`, `started`, `worklogs=N` and per day `worklog_<i>_{day,seconds,time_spent,started}` |
 | Log work | `plane.sh log-work KEY SECONDS STARTED "note"` → posts the comment **and** records the ledger row; prints `comment_id`, `existing` (1 = the same worklog was already there) |
 | Move state | `plane.sh move KEY start\|close\|done\|<state name>` → `old → new`, `already in`, or exit 3 with the state list |
 | States | `plane.sh states KEY`; add one: `plane.sh add-state PREFIX Deployed started` (skipped if present) |
@@ -222,12 +222,17 @@ not change them unless asked.
 1. Setup.
 2. `timer.sh off KEY` ("not active" is fine; the recorded total is used).
 3. `plane.sh figures KEY`. It subtracts time already logged through this
-   workflow (the ledger) and rounds the remainder UP to the quarter hour.
+   workflow (the ledger) and splits the remainder by the day it was tracked,
+   each day rounded UP to the quarter hour: `worklogs=N` and per day
+   `worklog_<i>_day`, `_seconds`, `_time_spent`, `_started`;
+   `rounded_seconds` is their sum.
 4. When `rounded_seconds` is 0, say there is nothing new to log. Otherwise
-   (invoking `close` is the request): `plane.sh log-work KEY
-   <rounded_seconds> "<started>" "<note>"` with a one-line note in
-   `worklog_language` naming only the phases that happened, e.g.
-   `Investigation, fix (IBAN matching), tests, production deploy.`
+   (invoking `close` is the request) write one worklog per `worklog_<i>`,
+   oldest first; a worklog has a single start and is filed under that day,
+   so never merge days into one: `plane.sh log-work KEY
+   <worklog_<i>_seconds> "<worklog_<i>_started>" "<note>"` with a one-line
+   note in `worklog_language` naming only the phases that happened that day,
+   e.g. `Investigation, fix (IBAN matching), tests, production deploy.`
 5. `plane.sh move KEY close`; with `--done` in the extra input,
    `plane.sh move KEY done` instead.
 6. Draft the closing comment (style below) from this session's work; in a
@@ -244,6 +249,7 @@ not change them unless asked.
 |---|---|
 | Timer | stopped · 1h 09m tracked · 1h 15m rounded |
 | Worklog | 1h 15m logged · started 2026-10-05 11:24 · comment <first 8 chars of id> |
+| Worklog | 30m logged · started 2026-10-06 09:10 · comment <...> (one row per day) |
 | State | In Progress → Deployed |
 | Comment | waiting for confirmation |
 <url>
@@ -263,8 +269,10 @@ Read-only until the user answers the final question.
    minute), anything else is the date (default `today`, also `yesterday`,
    `YYYY-MM-DD`, `"last friday"`).
 2. In parallel: `plane.sh day [DATE] [--here]` (local figures: header,
-   table, one `[KEY]` block per item with `unlogged_rounded_seconds`,
-   `time_spent`, `started`, the timeline and the ledger rows) and
+   table, one `[KEY]` block per item with `unlogged_rounded_seconds` and the
+   ready-made worklogs, one per day with unlogged time (`worklogs=N`,
+   `worklog_<i>_day`, `_seconds`, `_time_spent`, `_started`), the timeline
+   and the ledger rows) and
    `plane.sh worklog-days DATE DATE [--scan]` (my worklog comments filed
    under that day, per key). Then `plane.sh issue KEY` for each key from
    either source, for title and state (only the `title=` and `state=` lines
@@ -285,8 +293,8 @@ Read-only until the user answers the final question.
 
    Tracked/Rounded from the timer for that day; Plane = my worklog comments
    started that day; To log = `unlogged_rounded_seconds` (the whole
-   remainder, which can include earlier days; say so when it differs from
-   Rounded). Rows sorted by first touch, hand-logged rows last.
+   remainder, which can include earlier days; when it does, say which days
+   and how much each). Rows sorted by first touch, hand-logged rows last.
 
    **Checks**, only what applies:
    - a running or paused timer;
@@ -300,20 +308,25 @@ Read-only until the user answers the final question.
      to align the ledger before logging;
    - a day total below the tracked wall clock by more than 30 minutes once
      everything is logged.
-4. Nothing to log: `Nothing left to log for DATE.` Otherwise preview:
+4. Nothing to log: `Nothing left to log for DATE.` Otherwise preview, one
+   row per `worklog_<i>` (a key with time left from earlier days gets a row
+   per day):
 
    ```
    | Key | Time | Started | Worklog note |
    |---|---|---|---|
    | ABC-12 | 1h 45m | 2026-10-05 09:36 | Investigation and fix of ... |
+   | ABC-9 | 30m | 2026-10-02 16:10 | Review fixes ... |
+   | ABC-9 | 1h | 2026-10-05 11:02 | Tests and staging deploy ... |
    ```
 
    Notes are drafted as in `close`; for a key this session did not touch use
    `plane.sh context KEY`; when still thin put `?` and ask. Then ask:
    `Reply "log all", "log KEY,KEY" or "skip".` and do nothing until the
    answer is one of those; an edited note is a new preview.
-5. On `log ...`: `plane.sh log-work KEY <unlogged_rounded_seconds>
-   "<started>" "<note>"` per chosen key. Timers and states stay as they are.
+5. On `log ...`: `plane.sh log-work KEY <worklog_<i>_seconds>
+   "<worklog_<i>_started>" "<note>"` per chosen key and worklog, oldest
+   first. Timers and states stay as they are.
    Report key, time, comment id and the new day total. A failure stops the
    batch; say which keys were written.
 
@@ -374,10 +387,10 @@ Read-only until the user answers the final question.
   table: state, assignees, updated, timer state, tracked, logged, unlogged
   (rounded), URL. Add `plane.sh ledger-check KEY` when logged > 0 and flag
   any row that is not `ok`.
-- `log [time]` - `plane.sh figures KEY`; the given duration
-  (`plane.sh parse-time "1h 30m"`) or `rounded_seconds`. Zero: nothing to
-  log. Otherwise `plane.sh log-work` as in `close` step 4, with `started`
-  from the figures. The timer keeps its state.
+- `log [time]` - `plane.sh figures KEY`. Without a duration, the per-day
+  worklogs as in `close` step 4 (zero: nothing to log). With a duration
+  (`plane.sh parse-time "1h 30m"`), one `plane.sh log-work` of that length
+  with `started` from the figures (the first day still to log). The timer keeps its state.
 - `comment <notes>` - draft (from the notes or the session), preview, post on
   an explicit yes.
 - `move <state>` - `plane.sh move KEY "<state>"`; exit 3: show the states and
